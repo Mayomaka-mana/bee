@@ -212,6 +212,9 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
     bot.moveYTo(2)
     bot.moveXZTo(table.unpack(apiaryLocationList[availableApiary]))
     --培育蜂后
+    if type(inventory_controller.dropIntoSlot) ~= "function" then
+        error("当前物品栏交互升级不支持 dropIntoSlot，无法向蜂箱投放蜜蜂；请更换兼容的 inventory_controller 升级")
+    end
     robot.select(princessSlot)
     if not inventory_controller.dropIntoSlot(0, 1, 1) then
         error("apiary.nextGeneration()转移公主蜂失败")

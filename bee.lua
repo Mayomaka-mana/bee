@@ -6,6 +6,10 @@ local strategy, mutations, device
 local function initialize()
     if not component.inventory_controller then
         error("缺少物品栏交互升级")
+    elseif type(component.inventory_controller.dropIntoSlot) ~= "function" then
+        error("当前物品栏交互升级不支持 dropIntoSlot；请安装兼容的 inventory_controller 升级")
+    elseif type(component.inventory_controller.suckFromSlot) ~= "function" then
+        error("当前物品栏交互升级不支持 suckFromSlot；请安装兼容的 inventory_controller 升级")
     elseif not component.robot then
         error("此程序需要在机器人上运行")
     elseif component.robot.inventorySize() < 32 then

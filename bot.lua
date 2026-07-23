@@ -77,14 +77,13 @@ local inventoryChangerList = {
 }
 for _, pack in pairs(inventoryChangerList) do--对于可能改变物品栏的函数，在结束后执行一个sleep(0.01)等待异步操作更新物品栏映射表
     local lib, funcName = pack[1], pack[2]
-    local previousFunc = lib[funcName]
-    if type(previousFunc) ~= "function" then
-        error("缺少物品栏操作函数 " .. funcName)
-    end
-    lib[funcName] = function(...)
-        local results = table.pack(previousFunc(...))
-        os.sleep(0.01)
-        return table.unpack(results, 1, results.n)
+    local previousFunc = lib and lib[funcName]
+    if type(previousFunc) == "function" then
+        lib[funcName] = function(...)
+            local results = table.pack(previousFunc(...))
+            os.sleep(0.01)
+            return table.unpack(results, 1, results.n)
+        end
     end
 end
 
