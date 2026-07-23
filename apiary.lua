@@ -12,29 +12,41 @@ local inventory_controller = component.inventory_controller
 local upgrade_me = component.upgrade_me
 local beekeeper = component.beekeeper
 
-local function resolveInventoryControllerAddress()
+local function resolveInventoryControllerAddresses()
+    local addresses, seen = {}, {}
+    local function addAddress(address)
+        if type(address) == "string" and not seen[address] then
+            seen[address] = true
+            table.insert(addresses, address)
+        end
+    end
     if type(component.get) == "function" then
         local success, result = pcall(component.get, "inventory_controller")
         if success then
             if type(result) == "string" then
-                return result
+                addAddress(result)
             elseif type(result) == "table" and type(result.address) == "string" then
-                return result.address
+                addAddress(result.address)
             end
         end
     end
     if type(component.list) == "function" then
         local success, iterator = pcall(component.list, "inventory_controller", true)
         if success and type(iterator) == "function" then
-            local addressSuccess, address = pcall(iterator)
-            if addressSuccess and type(address) == "string" then
-                return address
+            while true do
+                local addressSuccess, address = pcall(iterator)
+                if not addressSuccess or not address then
+                    break
+                end
+                addAddress(address)
             end
         end
     end
+    return addresses
 end
 
-local inventoryControllerAddress = resolveInventoryControllerAddress()
+local inventoryControllerAddresses = resolveInventoryControllerAddresses()
+local apiarySide
 
 local function invokeController(name, ...)
     local directSuccess, directResult, directReason = pcall(function(...)
@@ -42,21 +54,22 @@ local function invokeController(name, ...)
         if type(method) ~= "function" then
             error("missing method")
         end
-        return method(inventory_controller, ...)
+        return method(...)
     end, ...)
+    local directError = directSuccess and directReason or directResult
     if directSuccess and directResult then
         return true, directResult, directReason
     end
-    local directError = directSuccess and directReason or directResult
-    if inventoryControllerAddress and type(component.invoke) == "function" then
-        local invokeSuccess, invokeResult, invokeReason = pcall(component.invoke, inventoryControllerAddress, name, ...)
-        if invokeSuccess and invokeResult then
-            return true, invokeResult, invokeReason
+    if #inventoryControllerAddresses > 0 and type(component.invoke) == "function" then
+        local invokeError
+        for _, address in ipairs(inventoryControllerAddresses) do
+            local invokeSuccess, invokeResult, invokeReason = pcall(component.invoke, address, name, ...)
+            if invokeSuccess and invokeResult then
+                return true, invokeResult, invokeReason
+            end
+            invokeError = tostring(invokeResult or invokeReason)
         end
-        if invokeSuccess then
-            return true, invokeResult, invokeReason
-        end
-        return false, nil, tostring(directError) .. "; component.invoke: " .. tostring(invokeResult)
+        return true, false, tostring(directError) .. "; component.invoke: " .. tostring(invokeError)
     end
     if directSuccess then
         return true, directResult, directReason
@@ -64,43 +77,81 @@ local function invokeController(name, ...)
     return false, nil, directError
 end
 
+local function findApiarySide()
+    if apiarySide ~= nil then
+        return apiarySide
+    end
+    local candidates = {0, 1, 2, 3, 4, 5}
+    for _, side in ipairs(candidates) do
+        local invoked, name = invokeController("getInventoryName", side)
+        if invoked and type(name) == "string" then
+            local lowerName = name:lower()
+            if lowerName:find("apiculture", 1, true) or lowerName:find("apiary", 1, true) then
+                apiarySide = side
+                return side
+            end
+        end
+    end
+    return nil
+end
+
 local function dropIntoApiary(slot, amount)
-    local invoked, result, reason = invokeController("dropIntoSlot", 0, slot, amount)
-    if not invoked or not result then
+    local side = findApiarySide()
+    if side == nil then
+        error("未找到蜂箱方向：请确认机器人位于蜂箱正上方，且 inventory_controller 能识别 Forestry 蜂箱")
+    end
+    local invoked, result, reason = invokeController("dropIntoSlot", side, slot, amount)
+    if not invoked then
+        error("inventory_controller 不支持 dropIntoSlot；当前版本无法按蜂箱槽位投放蜜蜂：" .. tostring(reason))
+    end
+    if not result then
         local inventoryName, inventorySize = "未知", "未知"
-        local nameSuccess, nameResult = pcall(inventory_controller.getInventoryName, 0)
+        local nameSuccess, nameResult = pcall(inventory_controller.getInventoryName, side)
         if nameSuccess and nameResult then
             inventoryName = tostring(nameResult)
         end
-        local sizeSuccess, sizeResult = pcall(inventory_controller.getInventorySize, 0)
+        local sizeSuccess, sizeResult = pcall(inventory_controller.getInventorySize, side)
         if sizeSuccess and sizeResult then
             inventorySize = tostring(sizeResult)
         end
-        error(string.format("向蜂箱槽位投放失败：side=0, slot=%s, count=%s, inventory=%s, inventorySize=%s, robotSlot=%s, robotCount=%s, reason=%s",
-            tostring(slot), tostring(amount), inventoryName, inventorySize, tostring(robot.select()), tostring(robot.count()), tostring(reason)))
+        error(string.format("向蜂箱槽位投放失败：side=%s, slot=%s, count=%s, inventory=%s, inventorySize=%s, robotSlot=%s, robotCount=%s, reason=%s",
+            tostring(side), tostring(slot), tostring(amount), inventoryName, inventorySize, tostring(robot.select()), tostring(robot.count()), tostring(reason)))
     end
     return result, reason
 end
 
 local function suckFromApiary(slot)
     if slot ~= nil then
-        local invoked, result, reason = invokeController("suckFromSlot", 0, slot)
+        local side = findApiarySide()
+        if side == nil then
+            return false, "未找到蜂箱方向", false
+        end
+        local invoked, result, reason = invokeController("suckFromSlot", side, slot)
         if invoked then
             return result, reason, true
         end
+        return false, reason, true
     end
-    return robot.suckDown(), nil, false
+    return false, "未指定蜂箱输出槽位", false
 end
 
 local function getApiaryStack(slot)
-    local invoked, stack = invokeController("getStackInSlot", 0, slot)
+    local side = findApiarySide()
+    if side == nil then
+        return nil
+    end
+    local invoked, stack = invokeController("getStackInSlot", side, slot)
     return invoked and stack or nil
 end
 
 local function collectApiaryOutput(slot)
-    local invoked, result, reason = invokeController("suckFromSlot", 0, slot)
+    local side = findApiarySide()
+    if side == nil then
+        return false, "未找到蜂箱方向"
+    end
+    local invoked, result, reason = invokeController("suckFromSlot", side, slot)
     if not invoked then
-        error("inventory_controller 无法调用 suckFromSlot：" .. tostring(reason))
+        error("inventory_controller 不支持 suckFromSlot，无法收集蜂箱输出：" .. tostring(reason))
     end
     return result, reason
 end
@@ -301,6 +352,7 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
     local previousLabel = bot.inventoryLabel
     bot.inventoryLabel = "apiary.nextGeneration()"
     setupApiary(availableApiary, requiredApiaryDamage, type(mutation) == "table" and mutation.foundation)
+    apiarySide = nil
     local previousFertility = bot.inventory[princessSlot].fertility[1]
     bot.moveYTo(2)
     bot.moveXZTo(table.unpack(apiaryLocationList[availableApiary]))

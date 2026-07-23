@@ -23,10 +23,25 @@ local function initialize()
     elseif component.inventory_controller.getInventoryName(0) ~= "tile.oc.charger" then
         error("机器人初始位置应位于OC充电器上方")
     end
+    print("蜂箱交互兼容层 v3")
     local controller = component.inventory_controller
     local dropSupported = type(controller.dropIntoSlot) == "function"
     local suckSupported = type(controller.suckFromSlot) == "function"
-    print("物品栏交互升级: dropIntoSlot=" .. tostring(dropSupported) .. ", suckFromSlot=" .. tostring(suckSupported))
+    local address = type(controller.address) == "string" and controller.address or "unknown"
+    print("物品栏交互升级: address=" .. address .. ", dropIntoSlot=" .. tostring(dropSupported) .. ", suckFromSlot=" .. tostring(suckSupported))
+    if type(component.methods) == "function" and address ~= "unknown" then
+        local methodsSuccess, methods = pcall(component.methods, address)
+        if methodsSuccess and type(methods) == "table" then
+            local methodNames = {}
+            for name, available in pairs(methods) do
+                if available then
+                    table.insert(methodNames, tostring(name))
+                end
+            end
+            table.sort(methodNames)
+            print("物品栏交互升级API: " .. table.concat(methodNames, ","))
+        end
+    end
     print("加载中...")
     mutations = require("mutations")
     device = require("device")
