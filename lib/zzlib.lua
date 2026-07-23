@@ -54,6 +54,9 @@ local function arraytostr(array)
 end
 
 local function inflate_gzip(bs)
+  if not bs.buf or #bs.buf < 10 then
+    error("truncated gzip header")
+  end
   local id1,id2,cm,flg = bs.buf:byte(1,4)
   if id1 ~= 31 or id2 ~= 139 then
     error("invalid gzip header")
@@ -61,18 +64,33 @@ local function inflate_gzip(bs)
   if cm ~= 8 then
     error("only deflate format is supported")
   end
+  if infl.band(flg, 0xe0) ~= 0 then
+    error("gzip header contains reserved flags")
+  end
   bs.pos=11
   if infl.band(flg,4) ~= 0 then
-    local xl1,xl2 = bs.buf.byte(bs.pos,bs.pos+1)
+    local xl1,xl2 = bs.buf:byte(bs.pos,bs.pos+1)
+    if not xl1 or not xl2 then
+      error("truncated gzip extra field")
+    end
     local xlen = xl2*256+xl1
+    if bs.pos + xlen + 1 > #bs.buf then
+      error("truncated gzip extra field")
+    end
     bs.pos = bs.pos+xlen+2
   end
   if infl.band(flg,8) ~= 0 then
-    local pos = bs.buf:find("\0",bs.pos)
+    local pos = bs.buf:find("\0",bs.pos,true)
+    if not pos then
+      error("unterminated gzip filename")
+    end
     bs.pos = pos+1
   end
   if infl.band(flg,16) ~= 0 then
-    local pos = bs.buf:find("\0",bs.pos)
+    local pos = bs.buf:find("\0",bs.pos,true)
+    if not pos then
+      error("unterminated gzip comment")
+    end
     bs.pos = pos+1
   end
   if infl.band(flg,2) ~= 0 then
@@ -103,6 +121,9 @@ end
 local function inflate_zlib(bs)
   local cmf = bs.buf:byte(1)
   local flg = bs.buf:byte(2)
+  if not cmf or not flg then
+    error("truncated zlib header")
+  end
   if (cmf*256+flg)%31 ~= 0 then
     error("zlib header check bits are incorrect")
   end
@@ -140,7 +161,13 @@ function zzlib.gunzipf(filename)
   if not file then
     return nil,err
   end
-  return inflate_gzip(infl.bitstream_init(file))
+  local bs = infl.bitstream_init(file)
+  local success, result = pcall(inflate_gzip, bs)
+  if not success then
+    bs:close()
+    error(result, 0)
+  end
+  return result
 end
 
 function zzlib.gunzip(str)

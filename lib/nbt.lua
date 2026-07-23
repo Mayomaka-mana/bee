@@ -70,11 +70,11 @@ module.TAGS[module.TAGS.LONG] = {
     decode = function (reader)
         return {
             _type = module.TAGS.LONG,
-            value = sunpack('>l', reader(8))
+            value = sunpack('>i8', reader(8))
         }
     end,
     encode = function (obj)
-        return spack('>l', module.getValue(obj))
+        return spack('>i8', module.getValue(obj))
     end
 }
 
@@ -108,6 +108,9 @@ module.TAGS[module.TAGS.DOUBLE] = {
 module.TAGS[module.TAGS.BYTE_ARRAY] = {
     decode = function (reader)
         local size = module.TAGS[module.TAGS.INT].decode(reader).value
+        if size < 0 then
+            error("negative byte array length: " .. size)
+        end
         local t = {}
     
         for i = 1, size do
@@ -159,6 +162,9 @@ module.TAGS[module.TAGS.LIST] = {
     decode = function (reader)
         local itemID = module.TAGS[module.TAGS.BYTE].decode(reader).value
         local length = module.TAGS[module.TAGS.INT].decode(reader).value
+        if length < 0 then
+            error("negative list length: " .. length)
+        end
         local tag = module.TAGS[itemID]
         local t = {}
     
@@ -263,6 +269,9 @@ module.TAGS[module.TAGS.COMPOUND] = {
 module.TAGS[module.TAGS.INT_ARRAY] = {
     decode = function (reader)
         local len = module.TAGS[module.TAGS.INT].decode(reader).value
+        if len < 0 then
+            error("negative int array length: " .. len)
+        end
         local t = {}
     
         for i = 1, len do
@@ -300,6 +309,9 @@ module.TAGS[module.TAGS.INT_ARRAY] = {
 module.TAGS[module.TAGS.LONG_ARRAY] = {
     decode = function (reader)
         local len = module.TAGS[module.TAGS.INT].decode(reader).value
+        if len < 0 then
+            error("negative long array length: " .. len)
+        end
         local t = {}
     
         for i = 1, len do
@@ -376,6 +388,9 @@ function module.decodeNetwork(reader)
 end
 
 function module.decode(payload)
+    if type(payload) ~= "string" or #payload < 3 then
+        error("invalid NBT payload")
+    end
     local reader = module.stringReader(payload)
 
     local rootID = sunpack('b', reader(1))
@@ -580,6 +595,9 @@ end
 
 -- function for parsing SNBT string
 function module.decodeSNBT(input)
+    if type(input) ~= "string" then
+        error("SNBT input must be a string")
+    end
     local tokens = snbtTokenize(input)
     
     local parseValue

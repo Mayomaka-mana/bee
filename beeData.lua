@@ -18,18 +18,23 @@ local function saveData()
     if data then
         data.initialized = M.initialized
     end
-    local file = io.open("data.txt", "w")
-    if file then
-        file:write(serialization.serialize(data) or "{}")
-        file:close()
+    local file, err = io.open("data.txt", "w")
+    if not file then
+        error("无法保存蜜蜂数据: " .. tostring(err))
     end
+    file:write(serialization.serialize(data) or "{}")
+    file:close()
     
 end
 local function loadData()
     local file = io.open("data.txt", "r")
     if file then
-        data = serialization.unserialize(file:read("*a"))
+        local content = file:read("*a")
         file:close()
+        local success, result = pcall(serialization.unserialize, content)
+        if success and type(result) == "table" then
+            data = result
+        end
     end
     if not data then
         data = {
@@ -152,20 +157,36 @@ function M.updateUsingPrincess(slot)
 end
 
 function M.getDroneTag(species)
+    if type(species) ~= "string" or species == "" then
+        error("错误的调用beeData.getDroneTag()")
+    end
     database.set(1, "Forestry:beeDroneGE", 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..species..'",UID1:"'..species..'"}]}}')
-    local droneList = upgrade_me.getItemsInNetwork({label = database.get(1).label})
+    local databaseStack = database.get(1)
+    if not databaseStack or not databaseStack.label then
+        error("无法从数据库获取品种 " .. species .. " 的物品标签")
+    end
+    local droneList = upgrade_me.getItemsInNetwork({label = databaseStack.label})
+    if not droneList then
+        error("超出ME网络范围")
+    end
     for slot, stack in pairs(bot.inventory) do
-        if stack and stack.name == "Forestry:beeDroneGE" and stack.species[1] == species and stack.species[2] == species then
-            table.insert(droneList, component.inventory_controller.getStackInInternalSlot(slot))
+        if stack and stack.name == "Forestry:beeDroneGE" and stack.species and stack.species[1] == species and stack.species[2] == species then
+            local internalStack = component.inventory_controller.getStackInInternalSlot(slot)
+            if internalStack then
+                table.insert(droneList, internalStack)
+            end
         end
     end
     if #droneList < 2 then
         return droneList[1] and droneList[1].tag
     end
     local scoreList = {}
-    for i, drone in pairs(droneList) do
+    for i, drone in ipairs(droneList) do
         local score = 0
-        local droneGenes = analyzeGenes(drone)
+        local success, droneGenes = pcall(analyzeGenes, drone)
+        if not success then
+            droneGenes = nil
+        end
         local templateGenes = {
             speed = data.speedLevel,
             lifespan = 1,
@@ -179,31 +200,33 @@ function M.getDroneTag(species)
             tolerantFlyer = true,
             caveDwelling = true
         }
-        for chromosome, gene in pairs(templateGenes) do
-            if droneGenes[chromosome][1] == gene then
-                score = score + 1
+        if droneGenes then
+            for chromosome, gene in pairs(templateGenes) do
+                if droneGenes[chromosome][1] == gene then
+                    score = score + 1
+                end
+                if droneGenes[chromosome][2] == gene then
+                    score = score + 1
+                end
+                if droneGenes[chromosome][1] == droneGenes[chromosome][2] then
+                    score = score + 3
+                end
             end
-            if droneGenes[chromosome][2] == gene then
-                score = score + 1
+            if droneGenes.species[2] ~= species then
+                score = score - 100
             end
-            if droneGenes[chromosome][1] == droneGenes[chromosome][2] then
-                score = score + 3
+            if droneGenes.species[1] == species or droneGenes.species[2] == species then
+                scoreList[i] = score
             end
-        end
-        if droneGenes.species[2] ~= species then
-            score = score - 100
-        end
-        if droneGenes.species[1] == species or droneGenes.species[2] == species then
-            scoreList[i] = score
         end
     end
-    local bestIndex = 1
+    local bestIndex
     for i, score in pairs(scoreList) do
-        if score > scoreList[bestIndex] then
+        if not bestIndex or score > scoreList[bestIndex] then
             bestIndex = i
         end
-    end 
-    return droneList[bestIndex] and droneList[bestIndex].tag
+    end
+    return bestIndex and droneList[bestIndex] and droneList[bestIndex].tag
 end
 
 local function isPrincessAvailable(tag)
@@ -219,8 +242,8 @@ function M.getPrincessTag(isNatural)
     end
     local princess = doUntil(function()
         local princessList = upgrade_me.getItemsInNetwork({name = "Forestry:beePrincessGE"})
-        for _, p in pairs(princessList) do
-            if p.individual.isNatural == (isNatural == true) and isPrincessAvailable(p.tag) then
+        for _, p in pairs(princessList or {}) do
+            if p.individual and p.individual.isNatural == (isNatural == true) and isPrincessAvailable(p.tag) then
                 return p
             end
         end

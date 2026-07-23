@@ -20,6 +20,10 @@ end
 --监听inventory_changed事件，维护物品栏映射表
 M.inventory, M.inventoryLabel = {}, nil
 function M.updateInventory(_, slot)
+    if type(slot) ~= "number" or slot < 1 or slot > inventorySize then
+        return false
+    end
+    local previousLabel = M.inventory[slot] and M.inventory[slot].inventoryLabel
     local stack = inventory_controller.getStackInInternalSlot(slot)
     if stack then
         local success, result = pcall(analyzeGenes, stack)
@@ -29,7 +33,7 @@ function M.updateInventory(_, slot)
             M.inventory[slot] = stack
             M.inventory[slot].type = "others"
         end
-        M.inventory[slot].inventoryLabel = M.inventoryLabel
+        M.inventory[slot].inventoryLabel = M.inventoryLabel ~= nil and M.inventoryLabel or previousLabel
     else
         M.inventory[slot] = nil
     end
@@ -41,12 +45,14 @@ event.listen("inventory_changed", M.updateInventory)
 --robot库物品栏操作函数重定向
 local t, e = robot.transferTo, inventory_controller.equip
 function M.equip()
+    local selectedSlot = robot.select()
     local previousLabel = M.inventoryLabel
     M.inventoryLabel = M.inventory[0] and M.inventory[0].inventoryLabel
-    M.inventory[0] = M.inventory[robot.select()]
-    e()
+    M.inventory[0] = M.inventory[selectedSlot]
+    local result, reason = e()
     os.sleep(0)
     M.inventoryLabel = previousLabel
+    return result, reason
 end
 function M.transfer(previousSlot, targetSlot)
     if not M.inventory[previousSlot] then
@@ -72,10 +78,13 @@ local inventoryChangerList = {
 for _, pack in pairs(inventoryChangerList) do--对于可能改变物品栏的函数，在结束后执行一个sleep(0.01)等待异步操作更新物品栏映射表
     local lib, funcName = pack[1], pack[2]
     local previousFunc = lib[funcName]
+    if type(previousFunc) ~= "function" then
+        error("缺少物品栏操作函数 " .. funcName)
+    end
     lib[funcName] = function(...)
-        local result = previousFunc(...)
+        local results = table.pack(previousFunc(...))
         os.sleep(0.01)
-        return result
+        return table.unpack(results, 1, results.n)
     end
 end
 
@@ -256,15 +265,23 @@ function M.checkItem(filter, request)
         if filter.name == "Forestry:beeDroneGE" or filter.name == "Forestry:beePrincessGE" then
             local speciesGenes = analyzeGenes({name=filter.name,tag=filter.tag,individual={}}).species
             database.set(1, filter.name, 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..speciesGenes[1]..'",UID1:"'..speciesGenes[2]..'"}]}}')
-            local label = database.get(1).label
-            return M.checkItemByTag({tag=filter.tag,label=label}, request)
+            local databaseStack = database.get(1)
+            if not databaseStack or not databaseStack.label then
+                error("无法从数据库获取蜜蜂物品标签")
+            end
+            return M.checkItemByTag({tag=filter.tag,label=databaseStack.label}, request)
         else
             error("错误的调用bot.checkItem()：不支持tag查询的物品")
         end
     end
     --]]
     local function isEqual(stack, _filter)
-        if (_filter.name and stack.name ~= _filter.name) or (_filter.damage and stack.damage ~= _filter.damage) or (_filter.tag and stack.tag ~= _filter.tag) then
+        if type(stack) ~= "table" then
+            return false
+        end
+        if (_filter.name ~= nil and stack.name ~= _filter.name)
+            or (_filter.damage ~= nil and stack.damage ~= _filter.damage)
+            or (_filter.tag ~= nil and stack.tag ~= _filter.tag) then
             return false
         end
         return true
@@ -311,7 +328,7 @@ function M.checkItem(filter, request)
         if not targetSlot then
             error("物品栏已满")
         end
-        request = math.min(request, stackList[1].maxSize)
+        request = math.min(request, stackList[1].maxSize or 64)
     end
     database.clear(1)
     upgrade_me.store(filter, database.address, 1)
@@ -320,8 +337,12 @@ function M.checkItem(filter, request)
         error("错误的调用bot.checkItem()")
     end
     if stack then
-        upgrade_me.requestItems(database.address, 1, request - count)
-        if M.inventory[targetSlot] then
+        local missing = math.max(request - robot.count(targetSlot), 0)
+        if missing == 0 then
+            return targetSlot
+        end
+        upgrade_me.requestItems(database.address, 1, missing)
+        if M.inventory[targetSlot] and robot.count(targetSlot) >= request then
             return targetSlot
         end
     end
@@ -363,6 +384,9 @@ function M.checkItemByTag(filter, request)
         i = i + 1
     end
     local stackList = upgrade_me.getItemsInNetwork({label=filter.label})
+    if not stackList then
+        error("超出ME网络范围")
+    end
     local dbIdx
     for i = 1, math.min(#stackList, 81) do
         if stackList[i].tag == filter.tag then
@@ -382,13 +406,17 @@ function M.checkItemByTag(filter, request)
         if not targetSlot then
             error("物品栏已满")
         end
-        request = math.min(request, stackList[dbIdx].maxSize)
+        request = math.min(request, stackList[dbIdx].maxSize or 64)
     end
     upgrade_me.store({label=filter.label}, database.address, 1)
-    local stack = database.get(dbIdx)
+    local stack = database.get(1)
     if stack and stack.tag == filter.tag then
-        upgrade_me.requestItems(database.address, dbIdx, request - count)
-        if M.inventory[targetSlot] then
+        local missing = math.max(request - robot.count(targetSlot), 0)
+        if missing == 0 then
+            return targetSlot
+        end
+        upgrade_me.requestItems(database.address, 1, missing)
+        if M.inventory[targetSlot] and robot.count(targetSlot) >= request then
             return targetSlot
         end
     end
@@ -407,6 +435,7 @@ function M.clearCrafterArea()
                 if not crafterArea[i] and not M.inventory[i] then
                     M.transfer(slot, i)
                     os.sleep(0)
+                    break
                 end
             end
         end

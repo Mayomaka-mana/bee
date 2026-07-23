@@ -7,7 +7,7 @@ local robot = require("robot")
 
 function M.swingDown(tool)
     if tool == "cell" then
-        if not bot.inventory[0] or bot.inventory[0].name ~= "minecraft:bucket" then
+        if not bot.inventory[0] or bot.inventory[0].name ~= "IC2:itemCellEmpty" then
             robot.select(
                 doUntil(function()
                     return bot.checkItem({name = "IC2:itemCellEmpty", damage = 0}, 1)
@@ -15,7 +15,9 @@ function M.swingDown(tool)
             )
             bot.equip()
         end
-        robot.useDown()
+        if not robot.useDown() then
+            error("使用空单元拆除基石失败")
+        end
         bot.inventory[0] = nil
     elseif tool == "bucket" then
         if not bot.inventory[0] or bot.inventory[0].name ~= "minecraft:bucket" then
@@ -26,7 +28,9 @@ function M.swingDown(tool)
             )
             bot.equip()
         end
-        robot.useDown()
+        if not robot.useDown() then
+            error("使用桶拆除基石失败")
+        end
         bot.inventory[0] = nil
     elseif tool == nil then
         if not bot.inventory[0] or bot.inventory[0].name ~= "gregtech:gt.Tool_Vajra" then
@@ -78,7 +82,9 @@ function M.placeDown(item)
             bot.forward()
             bot.turnRight()
             bot.turnRight()
-            robot.placeDown()--是的，IC2单元的放置逻辑就是这么神秘
+            if not robot.placeDown() then--是的，IC2单元的放置逻辑就是这么神秘
+                error("放置"..(item.label or item.name).."失败")
+            end
             bot.up()
             bot.forward()
             bot.inventory[0] = nil
@@ -89,7 +95,9 @@ function M.placeDown(item)
                 end, "缺少"..(item.label or item.name))
             )
             bot.equip()
-            robot.useDown()
+            if not robot.useDown() then
+                error("放置"..(item.label or item.name).."失败")
+            end
             bot.inventory[0] = {name = "minecraft:bucket"}
         else
             error("错误的调用tools.placeDown()")
@@ -100,7 +108,9 @@ function M.placeDown(item)
                 return bot.checkItem({name = item.name, damage = item.damage}, 1)
             end, "缺少"..(item.label or item.name))
         )
-        robot.placeDown()
+        if not robot.placeDown() then
+            error("放置"..(item.label or item.name).."失败")
+        end
     end
 end
 

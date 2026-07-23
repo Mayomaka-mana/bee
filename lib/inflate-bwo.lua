@@ -30,13 +30,23 @@ function inflate.bitstream_init(file)
   -- returns the next byte from the stream, excluding any half-read bytes
   function bs:next_byte()
     if self.pos > self.len then
+      if not self.file then
+        error("unexpected end of compressed data")
+      end
       self.buf = self.file:read(4096)
-      self.len = self.buf:len()
+      if not self.buf or #self.buf == 0 then
+        error("unexpected end of compressed data")
+      end
+      self.len = #self.buf
       self.pos = 1
     end
     local pos = self.pos
     self.pos = pos + 1
-    return self.buf:byte(pos)
+    local byte = self.buf:byte(pos)
+    if not byte then
+      error("unexpected end of compressed data")
+    end
+    return byte
   end
   -- peek a number of n bits from stream
   function bs:peekb(n)
@@ -56,6 +66,9 @@ function inflate.bitstream_init(file)
   -- get next variable-size of maximum size=n element from stream, according to Huffman table
   function bs:getv(hufftable,n)
     local e = hufftable[bs:peekb(n)]
+    if not e then
+      error("invalid Huffman code")
+    end
     local len = e & 15
     local ret = e >> 4
     self.n = self.n - len
@@ -71,9 +84,13 @@ function inflate.bitstream_init(file)
     bs.file = nil
     bs.buf = file
   else
+    if not file or type(file.read) ~= "function" then
+      error("invalid compressed data source")
+    end
     bs.buf = file:read(4096)
   end
-  bs.len = bs.buf:len()
+  bs.buf = bs.buf or ""
+  bs.len = #bs.buf
   return bs
 end
 

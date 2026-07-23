@@ -4,7 +4,10 @@ local nbt = require("nbt")
 local database = require("component").database
 
 local function decode(tag)
-    local temp = { pcall(zzlib.gunzip,tag) }
+    if type(tag) ~= "string" or tag == "" then
+        return nil, "NBT数据为空"
+    end
+    local temp = { pcall(zzlib.gunzip, tag) }
     if not temp[1] then
         return nil, temp[2]
     end
@@ -32,7 +35,7 @@ local temperatureLevel = { ["Icy"]=-2, ["Cold"]=-1, ["Normal"]=0, ["Warm"]=1, ["
 local humidityLevel = { ["Arid"]=-1, ["Normal"]=0, ["Damp"]=1 }
 --适应性
 local toleranceLevel = { ["forestry.toleranceUp1"]="UP_1", ["forestry.toleranceUp2"]="UP_2", ["forestry.toleranceUp3"]="UP_3", ["forestry.toleranceUp4"]="UP_4", ["forestry.toleranceUp5"]="UP_5", ["forestry.toleranceNone"]="NONE",
-                           ["forestry.toleranceDown1"]="DOWN_1", ["forestry.toleranceDown2"]="DOWN_2", ["forestry.toleranceDown3"]="DOWN_3", ["forestry.toleranceDown"]="DOWN_4", ["forestry.toleranceDown5"]="DOWN_5",
+                           ["forestry.toleranceDown1"]="DOWN_1", ["forestry.toleranceDown2"]="DOWN_2", ["forestry.toleranceDown3"]="DOWN_3", ["forestry.toleranceDown4"]="DOWN_4", ["forestry.toleranceDown"]="DOWN_4", ["forestry.toleranceDown5"]="DOWN_5",
                            ["forestry.toleranceBoth1"]="BOTH_1", ["forestry.toleranceBoth2"]="BOTH_2", ["forestry.toleranceBoth3"]="BOTH_3", ["forestry.toleranceBoth4"]="BOTH_4", ["forestry.toleranceBoth5"]="BOTH_5" }
 local toleranceDominance = { ["forestry.toleranceUp1"]=true, ["forestry.toleranceDown1"]=true, ["forestry.toleranceBoth1"]=true }
 --种族对应的最适温度与最适湿度
@@ -40,7 +43,11 @@ local original_genes = {}
 local function getOriginalGenes(stack, species, species2)
     species2 = species2 or species
     database.set(1, stack.name, 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..species..'",UID1:"'..species2..'"}]}}')
-    local individual  = database.get(1)--[[@as table]].individual
+    local databaseStack = database.get(1)
+    local individual = databaseStack and databaseStack.individual
+    if not individual or not individual.active or not individual.inactive then
+        error("无法从数据库获取原始蜜蜂基因")
+    end
     local lifespanList = { [10]=1, [20]=2, [30]=3, [35]=4, [40]=5, [45]=6, [50]=7, [60]=8, [70]=9, [600]=10 }
     return {
         name = stack.name,
@@ -72,29 +79,50 @@ local function getOriginalGenes(stack, species, species2)
 end
 
 local function analyzeBee(stack)--返回值只有部分基因能正确表示显隐性关系
+    if type(stack) ~= "table" or type(stack.name) ~= "string" then
+        error("蜜蜂物品数据缺失或格式错误")
+    end
+    stack.individual = type(stack.individual) == "table" and stack.individual or {}
     local tag = decode(stack.tag)
     local genes = {}
     if not tag or not tag.Genome or not tag.Genome.value or not tag.Genome.value.Chromosomes or not tag.Genome.value.Chromosomes.value then
         error("基因数据缺失或格式错误")
     end
     for _,t in pairs(tag.Genome.value.Chromosomes.value) do
-        if not t.value.Slot then
+        local chromosome = type(t) == "table" and t.value
+        local uid0 = chromosome and chromosome.UID0 and chromosome.UID0.value
+        local uid1 = chromosome and chromosome.UID1 and chromosome.UID1.value
+        if type(uid0) ~= "string" or type(uid1) ~= "string" then
+            error("蜜蜂NBT染色体数据缺失")
+        end
+        if not chromosome.Slot then
             if next(genes) then
                 error("蜜蜂NBT数据格式错误")
             end
-            return getOriginalGenes(stack, t.value.UID0.value, t.value.UID1.value)
+            return getOriginalGenes(stack, uid0, uid1)
         end
-        genes[t.value.Slot.value] = { t.value.UID0.value, t.value.UID1.value }
+        genes[chromosome.Slot.value] = { uid0, uid1 }
+    end
+    for _, slot in ipairs({0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13}) do
+        if not genes[slot] then
+            error("蜜蜂NBT缺少染色体槽位 " .. slot)
+        end
     end
     --如果original_genes无种族对应的温度与湿度信息，则在数据库中创建一个分析过的雄蜂，并记录其信息
-    if not original_genes[genes[0][1]] then
-        database.set(1, "Forestry:beeDroneGE", 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..genes[0][1]..'",UID1:"'..genes[0][1]..'"}]}}')
-        original_genes[genes[0][1]] = (database.get(1)--[[@as any]]).individual.active.species
+    local function loadOriginalSpecies(species)
+        if not original_genes[species] then
+            database.set(1, "Forestry:beeDroneGE", 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..species..'",UID1:"'..species..'"}]}}')
+            local databaseStack = database.get(1)
+            local individual = databaseStack and databaseStack.individual
+            local speciesData = individual and individual.active and individual.active.species
+            if not speciesData then
+                error("无法从数据库获取品种 " .. species .. " 的环境基因")
+            end
+            original_genes[species] = speciesData
+        end
     end
-    if not original_genes[genes[0][2]] then
-        database.set(1, "Forestry:beeDroneGE", 0, '{IsAnalyzed:1b,Genome:{Chromosomes:[0:{Slot:0b,UID0:"'..genes[0][2]..'",UID1:"'..genes[0][2]..'"}]}}')
-        original_genes[genes[0][2]] = (database.get(1)--[[@as any]]).individual.active.species
-    end
+    loadOriginalSpecies(genes[0][1])
+    loadOriginalSpecies(genes[0][2])
     --检查显性种族基因与适应性基因
     if stack.individual.ident and genes[0][1] ~= stack.individual.ident then
         genes[0] = { genes[0][2], genes[0][1] }

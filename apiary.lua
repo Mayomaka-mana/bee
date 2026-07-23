@@ -19,9 +19,15 @@ local apiaryList, worldAccelerator_tier = {}, 0
 do
     local config = require("config")
     local biomes = require("biomes")
+    if type(config.apiary) ~= "table" then
+        error("config.apiary 必须是表")
+    end
     for i=1,16 do
         if config.apiary[i] ~= 0 then
             local b = biomes[config.apiary[i]]
+            if type(b) ~= "table" then
+                error("config.apiary[" .. i .. "] 指向不存在的生物群系页码")
+            end
             apiaryList[i] = {
                 biome = b.name,
                 biomeTypes = b.biomeTypes,
@@ -116,6 +122,9 @@ end
 
 --选择最近的可用蜂箱
 local function selectNearestApiary(availableApiaryList)
+    if type(availableApiaryList) ~= "table" or #availableApiaryList == 0 then
+        return nil
+    end
     local selectedWorldAccelerator = math.ceil(apiaryLocation / 4)
     local apaiaryWithSameWorldAccelerator = {}
     for _, num in ipairs(availableApiaryList) do
@@ -131,7 +140,7 @@ end
 
 --根据公主蜂基因、突变条件检查是否有可用的蜂箱
 function M.checkNextGeneration(princessSlot, mutation)
-    if not bot.inventory[princessSlot] or bot.inventory[princessSlot].type ~= "beePrincess" then
+    if type(princessSlot) ~= "number" or not bot.inventory[princessSlot] or bot.inventory[princessSlot].type ~= "beePrincess" then
         error(string.format("错误的调用apiary.checkNextGeneration(%d)",princessSlot))
     end
     local availableApiaryList = {}
@@ -208,18 +217,14 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
         error("apiary.nextGeneration()转移公主蜂失败")
     end
     robot.select(droneSlot)
-    bot.inventory[droneSlot].size = bot.inventory[droneSlot].size - 1
     if not inventory_controller.dropIntoSlot(0, 2, 1) then
-        error("apiary.nextGeneration()转移工蜂失败")
+        error("apiary.nextGeneration()转移雄蜂失败")
     end
     bot.selectUsedSlot()--不用robot.select(1)是为了确保相同物品能够堆叠
-    while true do
+    doUntil(function()
         local info = inventory_controller.getStackInSlot(0, 1)
-        if not info or info.name == "Forestry:beeQueenGE" then
-            break
-        end
-        os.sleep(1)
-    end
+        return not info or info.name == "Forestry:beeQueenGE"
+    end, "蜂箱未能接受公主蜂")
     --等待子代并收集输出
     local function collectOutput()
         for i=3,9 do
@@ -235,10 +240,10 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
         end
         return false
     end
+    doUntil(function()
+        return beekeeper.canWork(0) or collectOutput()
+    end, "蜜蜂无法生长，请补全缺失的生长条件")
     while true do
-        doUntil(function()
-            return beekeeper.canWork(0) or collectOutput()
-        end, "蜜蜂无法生长，请补全缺失的生长条件")
         if collectOutput() then
             collectOutput()
             break
@@ -276,6 +281,9 @@ end
 
 --检查突变环境可行性
 function M.checkMutationEnvironment(mutation)
+    if type(mutation) ~= "table" then
+        error("错误的调用apiary.checkMutationEnvironment()")
+    end
     local result = {}
     if mutation.temperature then
         local hasSuitableApiary = false
