@@ -100,11 +100,18 @@ end
 -- ==============================
 local function _entry()
     local ok, err = pcall(_boot_load)
-    if not ok then return false, "BOOT_LOAD: " .. tostring(err) end
+    if not ok then
+        print("BOOT_LOAD: " .. tostring(err))
+        return false, "BOOT_LOAD: " .. tostring(err)
+    end
 
     ok, err = pcall(_boot_init)
-    if not ok then return false, "BOOT_INIT: " .. tostring(err) end
+    if not ok then
+        print("BOOT_INIT: " .. tostring(err))
+        return false, "BOOT_INIT: " .. tostring(err)
+    end
 
+    print("Bee breeding bot started. Entering main loop...")
     pcall(_main_loop)
     return true, "HALTED"
 end
@@ -115,10 +122,12 @@ local success, reason = xpcall(_entry, function(crash_err)
             _mod_storage.save_if_dirty()
         end
     end)
+    print("CRASH: " .. tostring(crash_err))
     return "CRASH: " .. tostring(crash_err)
 end)
 
 if not success then
+    if reason then print("FATAL: " .. reason) end
     pcall(_sleeper, 5)
     pcall(function() computer.shutdown() end)
 end
