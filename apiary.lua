@@ -36,69 +36,73 @@ end
 
 local inventoryControllerAddress = resolveInventoryControllerAddress()
 
-local function hasControllerMethod(name)
-    local success, method = pcall(function()
-        return inventory_controller[name]
-    end)
-    if success and type(method) == "function" then
-        return true
-    end
-    if inventoryControllerAddress and type(component.methods) == "function" then
-        local methodsSuccess, methods = pcall(component.methods, inventoryControllerAddress)
-        return methodsSuccess and type(methods) == "table" and methods[name] ~= nil
-    end
-    return false
-end
-
 local function invokeController(name, ...)
-    local success, result, reason = pcall(function(...)
-        return inventory_controller[name](...)
+    local directSuccess, directResult, directReason = pcall(function(...)
+        local method = inventory_controller[name]
+        if type(method) ~= "function" then
+            error("missing method")
+        end
+        return method(inventory_controller, ...)
     end, ...)
-    if success then
-        return result, reason
+    if directSuccess and directResult then
+        return true, directResult, directReason
     end
+    local directError = directSuccess and directReason or directResult
     if inventoryControllerAddress and type(component.invoke) == "function" then
         local invokeSuccess, invokeResult, invokeReason = pcall(component.invoke, inventoryControllerAddress, name, ...)
-        if invokeSuccess then
-            return invokeResult, invokeReason
+        if invokeSuccess and invokeResult then
+            return true, invokeResult, invokeReason
         end
+        if invokeSuccess then
+            return true, invokeResult, invokeReason
+        end
+        return false, nil, tostring(directError) .. "; component.invoke: " .. tostring(invokeResult)
     end
-    return false, result
+    if directSuccess then
+        return true, directResult, directReason
+    end
+    return false, nil, directError
 end
 
-local hasSlotTransfer = hasControllerMethod("dropIntoSlot") and hasControllerMethod("suckFromSlot")
-
 local function dropIntoApiary(slot, amount)
-    if hasSlotTransfer then
-        return invokeController("dropIntoSlot", 0, slot, amount)
+    local invoked, result, reason = invokeController("dropIntoSlot", 0, slot, amount)
+    if not invoked or not result then
+        local inventoryName, inventorySize = "未知", "未知"
+        local nameSuccess, nameResult = pcall(inventory_controller.getInventoryName, 0)
+        if nameSuccess and nameResult then
+            inventoryName = tostring(nameResult)
+        end
+        local sizeSuccess, sizeResult = pcall(inventory_controller.getInventorySize, 0)
+        if sizeSuccess and sizeResult then
+            inventorySize = tostring(sizeResult)
+        end
+        error(string.format("向蜂箱槽位投放失败：side=0, slot=%s, count=%s, inventory=%s, inventorySize=%s, robotSlot=%s, robotCount=%s, reason=%s",
+            tostring(slot), tostring(amount), inventoryName, inventorySize, tostring(robot.select()), tostring(robot.count()), tostring(reason)))
     end
-    return robot.dropDown(amount)
+    return result, reason
 end
 
 local function suckFromApiary(slot)
-    if hasSlotTransfer then
-        return invokeController("suckFromSlot", 0, slot)
+    if slot ~= nil then
+        local invoked, result, reason = invokeController("suckFromSlot", 0, slot)
+        if invoked then
+            return result, reason, true
+        end
     end
-    return robot.suckDown()
+    return robot.suckDown(), nil, false
 end
 
 local function getApiaryStack(slot)
-    if not hasSlotTransfer then
-        return nil
+    local invoked, stack = invokeController("getStackInSlot", 0, slot)
+    return invoked and stack or nil
+end
+
+local function collectApiaryOutput(slot)
+    local invoked, result, reason = invokeController("suckFromSlot", 0, slot)
+    if not invoked then
+        error("inventory_controller 无法调用 suckFromSlot：" .. tostring(reason))
     end
-    local success, stack = pcall(function()
-        return inventory_controller.getStackInSlot(0, slot)
-    end)
-    if success then
-        return stack
-    end
-    if inventoryControllerAddress and type(component.invoke) == "function" then
-        local invokeSuccess, invokeStack = pcall(component.invoke, inventoryControllerAddress, "getStackInSlot", 0, slot)
-        if invokeSuccess then
-            return invokeStack
-        end
-    end
-    return nil
+    return result, reason
 end
 
 M.isActive = false
@@ -310,25 +314,17 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
         error("apiary.nextGeneration()转移雄蜂失败")
     end
     bot.selectUsedSlot()--不用robot.select(1)是为了确保相同物品能够堆叠
-    if hasSlotTransfer then
-        doUntil(function()
-            local info = getApiaryStack(1)
-            return not info or info.name == "Forestry:beeQueenGE"
-        end, "蜂箱未能接受公主蜂")
-    end
+    doUntil(function()
+        local info = getApiaryStack(1)
+        return not info or info.name == "Forestry:beeQueenGE"
+    end, "蜂箱未能接受公主蜂")
     --等待子代并收集输出
     local function collectOutput()
-        if hasSlotTransfer then
-            for i=3,9 do
-                if not suckFromApiary(i) then
-                    break
-                end
-                os.sleep(0)
+        for i=3,9 do
+            if not collectApiaryOutput(i) then
+                break
             end
-        else
-            while suckFromApiary() do
-                os.sleep(0)
-            end
+            os.sleep(0)
         end
         for _,slot in ipairs(bot.getItemsWithLabel("apiary.nextGeneration()")) do
             if bot.inventory[slot] and bot.inventory[slot].type == "beePrincess" then
