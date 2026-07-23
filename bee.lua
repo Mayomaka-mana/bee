@@ -6,10 +6,6 @@ local strategy, mutations, device
 local function initialize()
     if not component.inventory_controller then
         error("缺少物品栏交互升级")
-    elseif type(component.inventory_controller.dropIntoSlot) ~= "function" then
-        error("当前物品栏交互升级不支持 dropIntoSlot；请安装兼容的 inventory_controller 升级")
-    elseif type(component.inventory_controller.suckFromSlot) ~= "function" then
-        error("当前物品栏交互升级不支持 suckFromSlot；请安装兼容的 inventory_controller 升级")
     elseif not component.robot then
         error("此程序需要在机器人上运行")
     elseif component.robot.inventorySize() < 32 then
@@ -27,6 +23,10 @@ local function initialize()
     elseif component.inventory_controller.getInventoryName(0) ~= "tile.oc.charger" then
         error("机器人初始位置应位于OC充电器上方")
     end
+    local controller = component.inventory_controller
+    local dropSupported = type(controller.dropIntoSlot) == "function"
+    local suckSupported = type(controller.suckFromSlot) == "function"
+    print("物品栏交互升级: dropIntoSlot=" .. tostring(dropSupported) .. ", suckFromSlot=" .. tostring(suckSupported))
     print("加载中...")
     mutations = require("mutations")
     device = require("device")

@@ -12,6 +12,95 @@ local inventory_controller = component.inventory_controller
 local upgrade_me = component.upgrade_me
 local beekeeper = component.beekeeper
 
+local function resolveInventoryControllerAddress()
+    if type(component.get) == "function" then
+        local success, result = pcall(component.get, "inventory_controller")
+        if success then
+            if type(result) == "string" then
+                return result
+            elseif type(result) == "table" and type(result.address) == "string" then
+                return result.address
+            end
+        end
+    end
+    if type(component.list) == "function" then
+        local success, iterator = pcall(component.list, "inventory_controller", true)
+        if success and type(iterator) == "function" then
+            local addressSuccess, address = pcall(iterator)
+            if addressSuccess and type(address) == "string" then
+                return address
+            end
+        end
+    end
+end
+
+local inventoryControllerAddress = resolveInventoryControllerAddress()
+
+local function hasControllerMethod(name)
+    local success, method = pcall(function()
+        return inventory_controller[name]
+    end)
+    if success and type(method) == "function" then
+        return true
+    end
+    if inventoryControllerAddress and type(component.methods) == "function" then
+        local methodsSuccess, methods = pcall(component.methods, inventoryControllerAddress)
+        return methodsSuccess and type(methods) == "table" and methods[name] ~= nil
+    end
+    return false
+end
+
+local function invokeController(name, ...)
+    local success, result, reason = pcall(function(...)
+        return inventory_controller[name](...)
+    end, ...)
+    if success then
+        return result, reason
+    end
+    if inventoryControllerAddress and type(component.invoke) == "function" then
+        local invokeSuccess, invokeResult, invokeReason = pcall(component.invoke, inventoryControllerAddress, name, ...)
+        if invokeSuccess then
+            return invokeResult, invokeReason
+        end
+    end
+    return false, result
+end
+
+local hasSlotTransfer = hasControllerMethod("dropIntoSlot") and hasControllerMethod("suckFromSlot")
+
+local function dropIntoApiary(slot, amount)
+    if hasSlotTransfer then
+        return invokeController("dropIntoSlot", 0, slot, amount)
+    end
+    return robot.dropDown(amount)
+end
+
+local function suckFromApiary(slot)
+    if hasSlotTransfer then
+        return invokeController("suckFromSlot", 0, slot)
+    end
+    return robot.suckDown()
+end
+
+local function getApiaryStack(slot)
+    if not hasSlotTransfer then
+        return nil
+    end
+    local success, stack = pcall(function()
+        return inventory_controller.getStackInSlot(0, slot)
+    end)
+    if success then
+        return stack
+    end
+    if inventoryControllerAddress and type(component.invoke) == "function" then
+        local invokeSuccess, invokeStack = pcall(component.invoke, inventoryControllerAddress, "getStackInSlot", 0, slot)
+        if invokeSuccess then
+            return invokeStack
+        end
+    end
+    return nil
+end
+
 M.isActive = false
 
 --载入蜂箱数据
@@ -212,29 +301,34 @@ function M.nextGeneration(princessSlot, droneSlot, mutation)
     bot.moveYTo(2)
     bot.moveXZTo(table.unpack(apiaryLocationList[availableApiary]))
     --培育蜂后
-    if type(inventory_controller.dropIntoSlot) ~= "function" then
-        error("当前物品栏交互升级不支持 dropIntoSlot，无法向蜂箱投放蜜蜂；请更换兼容的 inventory_controller 升级")
-    end
     robot.select(princessSlot)
-    if not inventory_controller.dropIntoSlot(0, 1, 1) then
+    if not dropIntoApiary(1, 1) then
         error("apiary.nextGeneration()转移公主蜂失败")
     end
     robot.select(droneSlot)
-    if not inventory_controller.dropIntoSlot(0, 2, 1) then
+    if not dropIntoApiary(2, 1) then
         error("apiary.nextGeneration()转移雄蜂失败")
     end
     bot.selectUsedSlot()--不用robot.select(1)是为了确保相同物品能够堆叠
-    doUntil(function()
-        local info = inventory_controller.getStackInSlot(0, 1)
-        return not info or info.name == "Forestry:beeQueenGE"
-    end, "蜂箱未能接受公主蜂")
+    if hasSlotTransfer then
+        doUntil(function()
+            local info = getApiaryStack(1)
+            return not info or info.name == "Forestry:beeQueenGE"
+        end, "蜂箱未能接受公主蜂")
+    end
     --等待子代并收集输出
     local function collectOutput()
-        for i=3,9 do
-            if not inventory_controller.suckFromSlot(0, i) then
-                break
+        if hasSlotTransfer then
+            for i=3,9 do
+                if not suckFromApiary(i) then
+                    break
+                end
+                os.sleep(0)
             end
-            os.sleep(0)
+        else
+            while suckFromApiary() do
+                os.sleep(0)
+            end
         end
         for _,slot in ipairs(bot.getItemsWithLabel("apiary.nextGeneration()")) do
             if bot.inventory[slot] and bot.inventory[slot].type == "beePrincess" then
